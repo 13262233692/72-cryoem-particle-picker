@@ -1,6 +1,7 @@
 use memmap2::Mmap;
 use std::fs::File;
 use std::path::Path;
+use crate::aligned::AlignedVec;
 
 pub const MRC_HEADER_SIZE: usize = 1024;
 
@@ -173,7 +174,7 @@ impl MrcFile {
         })
     }
 
-    pub fn extract_frame(&self, section: usize) -> Result<Vec<f32>, String> {
+    pub fn extract_frame(&self, section: usize) -> Result<AlignedVec<f32>, String> {
         if section >= self.header.nz as usize {
             return Err(format!("切片索引越界: {} >= {}", section, self.header.nz));
         }
@@ -185,7 +186,8 @@ impl MrcFile {
         let data_offset = MRC_HEADER_SIZE + self.header.nsymbt as usize;
         let section_start = data_offset + section * section_size;
 
-        let mut pixels = Vec::with_capacity(nx * ny);
+        let mut pixels: AlignedVec<f32> = AlignedVec::with_capacity(nx * ny);
+        debug_assert!(pixels.is_aligned(), "AlignedVec allocation failed to produce 64B-aligned pointer");
 
         for row in 0..ny {
             for col in 0..nx {
@@ -215,6 +217,7 @@ impl MrcFile {
             }
         }
 
+        debug_assert!(pixels.is_aligned());
         Ok(pixels)
     }
 
@@ -225,7 +228,7 @@ impl MrcFile {
         y0: usize,
         width: usize,
         height: usize,
-    ) -> Result<Vec<f32>, String> {
+    ) -> Result<AlignedVec<f32>, String> {
         let nx = self.header.nx as usize;
         let ny = self.header.ny as usize;
 
@@ -237,7 +240,8 @@ impl MrcFile {
         }
 
         let frame = self.extract_frame(section)?;
-        let mut region = Vec::with_capacity(width * height);
+        let mut region: AlignedVec<f32> = AlignedVec::with_capacity(width * height);
+        debug_assert!(region.is_aligned());
 
         for row in y0..y0 + height {
             for col in x0..x0 + width {
@@ -245,11 +249,13 @@ impl MrcFile {
             }
         }
 
+        debug_assert!(region.is_aligned());
         Ok(region)
     }
 }
 
-pub fn filter_dead_pixels(data: &mut Vec<f32>, sigma_threshold: f32) -> usize {
+pub fn filter_dead_pixels(data: &mut AlignedVec<f32>, sigma_threshold: f32) -> usize {
+    debug_assert!(data.is_aligned(), "filter_dead_pixels requires 64B-aligned input");
     let n = data.len();
     if n == 0 {
         return 0;

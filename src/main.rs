@@ -1,8 +1,10 @@
+mod aligned;
 mod mrc;
 mod fft;
 
 use clap::{Parser, Subcommand};
 use mrc::{MrcFile, filter_dead_pixels};
+use aligned::AlignedVec;
 
 #[derive(Parser)]
 #[command(name = "cryoem-picker")]
@@ -235,7 +237,8 @@ fn cmd_scan(path: &str, section: usize, window: usize, stride: usize, sigma: f32
             let x0 = grid_col * stride;
             let y0 = grid_row * stride;
 
-            let mut patch = Vec::with_capacity(window * window);
+            let mut patch: AlignedVec<f32> = AlignedVec::with_capacity(window * window);
+            debug_assert!(patch.is_aligned(), "patch buffer must be 64B-aligned for SIMD");
             for py in y0..y0 + window {
                 for px in x0..x0 + window {
                     patch.push(frame[py * nx + px]);

@@ -1,13 +1,16 @@
-use rustfft::{FftPlanner, num_complex::Complex64};
+use rustfft::FftPlanner;
+pub use num_complex::Complex64;
+use crate::aligned::AlignedVec;
 
 pub struct FftResult {
-    pub spectrum: Vec<f64>,
+    pub spectrum: AlignedVec<f64>,
     pub width: usize,
     pub height: usize,
 }
 
 impl FftResult {
     pub fn feature_summary(&self, num_rings: usize) -> FeatureSummary {
+        debug_assert!(self.spectrum.is_aligned(), "spectrum must be 64B-aligned");
         let cx = self.width as f64 / 2.0;
         let cy = self.height as f64 / 2.0;
         let max_radius = cx.min(cy);
@@ -101,6 +104,14 @@ impl std::fmt::Display for FeatureSummary {
 }
 
 pub fn fft_2d(data: &[f32], width: usize, height: usize) -> FftResult {
+    let data_ptr = data.as_ptr() as usize;
+    debug_assert!(
+        data_ptr % 64 == 0,
+        "Input data must be 64B-aligned for AVX-512 SIMD, got ptr=0x{:x} (align={})",
+        data_ptr,
+        data_ptr & 63
+    );
+
     let n = width.max(height);
     let padded_size = n.next_power_of_two();
 
@@ -108,7 +119,8 @@ pub fn fft_2d(data: &[f32], width: usize, height: usize) -> FftResult {
     let row_fft = planner.plan_fft_forward(padded_size);
     let col_fft = planner.plan_fft_forward(padded_size);
 
-    let mut buffer: Vec<Complex64> = vec![Complex64::new(0.0, 0.0); padded_size * padded_size];
+    let mut buffer: AlignedVec<Complex64> = AlignedVec::zeros(padded_size * padded_size);
+    debug_assert!(buffer.is_aligned(), "FFT Complex64 buffer must be 64B-aligned");
 
     for row in 0..height {
         for col in 0..width {
@@ -122,7 +134,8 @@ pub fn fft_2d(data: &[f32], width: usize, height: usize) -> FftResult {
         row_fft.process(&mut buffer[start..start + padded_size]);
     }
 
-    let mut col_buffer: Vec<Complex64> = vec![Complex64::new(0.0, 0.0); padded_size];
+    let mut col_buffer: AlignedVec<Complex64> = AlignedVec::zeros(padded_size);
+    debug_assert!(col_buffer.is_aligned());
     for col in 0..padded_size {
         for row in 0..padded_size {
             col_buffer[row] = buffer[row * padded_size + col];
@@ -133,7 +146,8 @@ pub fn fft_2d(data: &[f32], width: usize, height: usize) -> FftResult {
         }
     }
 
-    let mut spectrum = vec![0.0f64; padded_size * padded_size];
+    let mut spectrum: AlignedVec<f64> = AlignedVec::zeros(padded_size * padded_size);
+    debug_assert!(spectrum.is_aligned(), "output spectrum must be 64B-aligned");
     for (i, c) in buffer.iter().enumerate() {
         spectrum[i] = c.norm();
     }
@@ -147,7 +161,8 @@ pub fn fft_2d(data: &[f32], width: usize, height: usize) -> FftResult {
     }
 }
 
-fn fft_shift_2d(data: &mut [f64], width: usize, height: usize) {
+fn fft_shift_2d(data: &mut AlignedVec<f64>, width: usize, height: usize) {
+    debug_assert!(data.is_aligned(), "fft_shift input must be 64B-aligned");
     let half_w = width / 2;
     let half_h = height / 2;
 
