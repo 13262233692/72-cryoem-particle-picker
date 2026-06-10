@@ -54,6 +54,31 @@ enum Commands {
         #[arg(long, default_value_t = 5.0, help = "死像素过滤sigma阈值")]
         sigma: f32,
     },
+    #[command(about = "基于频域互相关的单颗粒对齐 (FFT cross-correlation alignment)")]
+    Align {
+        #[arg(long, help = "参考MRC文件路径")]
+        reference: String,
+        #[arg(long, help = "目标MRC文件路径")]
+        target: String,
+        #[arg(long, default_value_t = 0, help = "参考图切片索引")]
+        ref_section: usize,
+        #[arg(long, default_value_t = 0, help = "目标图切片索引")]
+        tgt_section: usize,
+        #[arg(long, default_value_t = 0, help = "参考图区域左上角X")]
+        ref_x: usize,
+        #[arg(long, default_value_t = 0, help = "参考图区域左上角Y")]
+        ref_y: usize,
+        #[arg(long, default_value_t = 0, help = "目标图区域左上角X")]
+        tgt_x: usize,
+        #[arg(long, default_value_t = 0, help = "目标图区域左上角Y")]
+        tgt_y: usize,
+        #[arg(long, default_value_t = 256, help = "对齐区域宽度")]
+        width: usize,
+        #[arg(long, default_value_t = 256, help = "对齐区域高度")]
+        height: usize,
+        #[arg(long, default_value_t = 5.0, help = "死像素过滤sigma阈值")]
+        sigma: f32,
+    },
 }
 
 fn main() {
@@ -67,6 +92,13 @@ fn main() {
         Commands::Scan {
             file, section, window, stride, sigma,
         } => cmd_scan(&file, section, window, stride, sigma),
+        Commands::Align {
+            reference, target, ref_section, tgt_section,
+            ref_x, ref_y, tgt_x, tgt_y, width, height, sigma,
+        } => cmd_align(
+            &reference, &target, ref_section, tgt_section,
+            ref_x, ref_y, tgt_x, tgt_y, width, height, sigma,
+        ),
     }
 }
 
@@ -265,4 +297,64 @@ fn cmd_scan(path: &str, section: usize, window: usize, stride: usize, sigma: f32
     println!("║ ★ 最强AC能量位置: Grid({}, {}) AC能量={:.4}           ║",
         best_pos.0, best_pos.1, max_ac);
     println!("╚══════════════════════════════════════════════════════════════╝");
+}
+
+fn cmd_align(
+    ref_path: &str,
+    tgt_path: &str,
+    ref_section: usize,
+    tgt_section: usize,
+    ref_x: usize,
+    ref_y: usize,
+    tgt_x: usize,
+    tgt_y: usize,
+    width: usize,
+    height: usize,
+    sigma: f32,
+) {
+    eprintln!("► 加载参考图: {}", ref_path);
+    let ref_mrc = match MrcFile::open(ref_path) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("✘ 参考图加载失败: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    eprintln!("► 加载目标图: {}", tgt_path);
+    let tgt_mrc = match MrcFile::open(tgt_path) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("✘ 目标图加载失败: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    eprintln!("► 提取参考区域 ({},{}) {}x{} 切片#{}", ref_x, ref_y, width, height, ref_section);
+    let mut ref_region = match ref_mrc.extract_region(ref_section, ref_x, ref_y, width, height) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("✘ 参考区域提取失败: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    eprintln!("► 提取目标区域 ({},{}) {}x{} 切片#{}", tgt_x, tgt_y, width, height, tgt_section);
+    let mut tgt_region = match tgt_mrc.extract_region(tgt_section, tgt_x, tgt_y, width, height) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("✘ 目标区域提取失败: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    let ref_filtered = filter_dead_pixels(&mut ref_region, sigma);
+    let tgt_filtered = filter_dead_pixels(&mut tgt_region, sigma);
+    eprintln!("► 死像素过滤: 参考图 {} 个, 目标图 {} 个", ref_filtered, tgt_filtered);
+
+    eprintln!("► 执行频域互相关对齐 (FFT cross-correlation)...");
+    let result = fft::align_images(&ref_region, &tgt_region, width, height);
+
+    println!();
+    print!("{}", result);
 }
